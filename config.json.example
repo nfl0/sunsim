@@ -1,0 +1,39 @@
+{
+  "solar_panel": {
+    "name": "Solar Panel",
+    "capacity": 5000.0
+  },
+  "battery": {
+    "name": "Battery",
+    "capacity": 2000.0
+  },
+  "charge_controller": {
+    "name": "Charge Controller",
+    "capacity": 30.0
+  },
+  "inverter": {
+    "name": "Inverter",
+    "capacity": 3000.0
+  },
+  "appliances": [
+    {
+      "name": "Heater",
+      "power": 800.0,
+      "priority": "High",
+      "start_time": "09:00",
+      "end_time": "23:00",
+      "min_runtime": 13.0
+    },
+    {
+      "name": "Computer",
+      "power": 150.0,
+      "priority": "Low",
+      "start_time": "11:00",
+      "end_time": "16:30",
+      "min_runtime": 5.0
+    }
+  ],
+  "sunrise": "08:30",
+  "sunset": "19:00",
+  "system_voltage": 12
+}
