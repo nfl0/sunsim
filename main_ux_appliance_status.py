@@ -1,14 +1,13 @@
 import sys
 import json
-import matplotlib
-matplotlib.use('Qt5Agg')  # Set the backend to Qt5Agg
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QLineEdit, QPushButton, QListWidget, QMessageBox, 
-                             QComboBox, QTimeEdit, QFileDialog, QTabWidget, QScrollArea)
+                             QComboBox, QTimeEdit, QFileDialog, QTabWidget, QGridLayout)
 from PyQt5.QtCore import Qt, QTime
-from PyQt5.QtGui import QFont, QColor, QPalette
+from PyQt5.QtGui import QFont
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 class SolarComponent:
     def __init__(self, name, capacity):
@@ -30,7 +29,7 @@ class Appliance:
         self.start_time = start_time
         self.end_time = end_time
         self.min_runtime = min_runtime
-        self.daily_runtime = {}
+        self.daily_runtime = {}  # Track runtime for each day
 
     def reset_daily_runtime(self, day):
         self.daily_runtime[day] = 0
@@ -109,36 +108,82 @@ class SolarHousehold:
         household.system_voltage = data["system_voltage"]
         return household
 
+class SimulationGraphs(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.layout = QVBoxLayout()
+        self.setLayout(self.layout)
+
+        self.figure = Figure(figsize=(10, 8))
+        self.canvas = FigureCanvas(self.figure)
+        self.layout.addWidget(self.canvas)
+
+        self.ax1 = self.figure.add_subplot(311)
+        self.ax2 = self.figure.add_subplot(312)
+        self.ax3 = self.figure.add_subplot(313)
+
+    def update_graphs(self, results):
+        self.ax1.clear()
+        self.ax2.clear()
+        self.ax3.clear()
+
+        hours = range(len(results))
+        generation = [r['generation'] for r in results]
+        power_used = [r['power_used'] for r in results]
+        battery_charge = [r['battery_charge'] for r in results]
+
+        self.ax1.plot(hours, generation, label='Solar Generation')
+        self.ax1.plot(hours, power_used, label='Power Used')
+        self.ax1.set_ylabel('Power (Wh)')
+        self.ax1.legend()
+        self.ax1.set_title('Solar Generation vs Power Used')
+
+        self.ax2.plot(hours, battery_charge)
+        self.ax2.set_ylabel('Battery Charge (Wh)')
+        self.ax2.set_title('Battery Charge over Time')
+
+        appliance_runtimes = {}
+        for i, result in enumerate(results):
+            for appliance in result['appliances_running']:
+                if appliance not in appliance_runtimes:
+                    appliance_runtimes[appliance] = [0] * len(results)
+                appliance_runtimes[appliance][i] = 1
+
+        for appliance, runtime in appliance_runtimes.items():
+            self.ax3.plot(hours, runtime, label=appliance)
+        self.ax3.set_ylabel('Running Status')
+        self.ax3.set_title('Appliance Running Status')
+        self.ax3.legend()
+
+        self.ax3.set_xlabel('Hours')
+        self.figure.tight_layout()
+        self.canvas.draw()
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Solar Powered Household Simulator")
         self.setGeometry(100, 100, 1200, 800)
         self.setStyleSheet("""
-            QMainWindow {
-                background-color: #f0f0f0;
+            QWidget {
+                font-size: 14px;
             }
             QLabel {
-                font-size: 14px;
-            }
-            QLineEdit, QComboBox, QTimeEdit {
-                font-size: 14px;
-                padding: 5px;
+                font-weight: bold;
             }
             QPushButton {
-                font-size: 14px;
-                padding: 8px 15px;
                 background-color: #4CAF50;
                 color: white;
+                padding: 8px 16px;
                 border: none;
                 border-radius: 4px;
             }
             QPushButton:hover {
                 background-color: #45a049;
             }
-            QListWidget {
-                font-size: 14px;
-                border: 1px solid #ddd;
+            QLineEdit, QComboBox, QTimeEdit {
+                padding: 6px;
+                border: 1px solid #ccc;
                 border-radius: 4px;
             }
         """)
@@ -185,23 +230,25 @@ class MainWindow(QMainWindow):
 
         setup_layout.addLayout(left_layout)
         setup_layout.addLayout(right_layout)
-
         setup_widget.setLayout(setup_layout)
+
         return setup_widget
 
     def create_simulation_tab(self):
         simulation_widget = QWidget()
         simulation_layout = QVBoxLayout()
 
-        # Run Simulation button
+        # Simulation control
+        control_layout = QHBoxLayout()
         self.simulate_btn = QPushButton("Run Simulation")
         self.simulate_btn.clicked.connect(self.run_simulation)
-        simulation_layout.addWidget(self.simulate_btn)
+        control_layout.addWidget(self.simulate_btn)
 
-        # Matplotlib figure
-        self.figure, self.ax = plt.subplots(2, 1, figsize=(10, 8))
-        self.canvas = FigureCanvas(self.figure)
-        simulation_layout.addWidget(self.canvas)
+        simulation_layout.addLayout(control_layout)
+
+        # Graphs
+        self.graphs = SimulationGraphs()
+        simulation_layout.addWidget(self.graphs)
 
         simulation_widget.setLayout(simulation_layout)
         return simulation_widget
@@ -214,84 +261,96 @@ class MainWindow(QMainWindow):
             ("Inverter", "capacity (watts)")
         ]
 
-        for component, unit in components:
-            layout.addWidget(QLabel(f"{component} {unit}:"))
+        component_layout = QGridLayout()
+        for i, (component, unit) in enumerate(components):
+            component_layout.addWidget(QLabel(f"{component} {unit}:"), i, 0)
             input_field = QLineEdit()
             input_field.setObjectName(f"{component.lower().replace(' ', '_')}_input")
-            layout.addWidget(input_field)
+            component_layout.addWidget(input_field, i, 1)
 
         set_components_btn = QPushButton("Set Components")
         set_components_btn.clicked.connect(self.set_components)
-        layout.addWidget(set_components_btn)
+        component_layout.addWidget(set_components_btn, len(components), 0, 1, 2)
+
+        layout.addLayout(component_layout)
 
     def create_system_settings(self, layout):
-        layout.addWidget(QLabel("Sunrise:"))
+        settings_layout = QGridLayout()
+        settings_layout.addWidget(QLabel("Sunrise:"), 0, 0)
         self.sunrise_edit = QTimeEdit()
         self.sunrise_edit.setTime(self.household.sunrise)
-        layout.addWidget(self.sunrise_edit)
+        settings_layout.addWidget(self.sunrise_edit, 0, 1)
 
-        layout.addWidget(QLabel("Sunset:"))
+        settings_layout.addWidget(QLabel("Sunset:"), 1, 0)
         self.sunset_edit = QTimeEdit()
         self.sunset_edit.setTime(self.household.sunset)
-        layout.addWidget(self.sunset_edit)
+        settings_layout.addWidget(self.sunset_edit, 1, 1)
 
-        layout.addWidget(QLabel("System Voltage:"))
+        settings_layout.addWidget(QLabel("System Voltage:"), 2, 0)
         self.system_voltage_combo = QComboBox()
         self.system_voltage_combo.addItems(["12V", "24V"])
-        layout.addWidget(self.system_voltage_combo)
+        settings_layout.addWidget(self.system_voltage_combo, 2, 1)
 
         set_system_btn = QPushButton("Set System Settings")
         set_system_btn.clicked.connect(self.set_system_settings)
-        layout.addWidget(set_system_btn)
+        settings_layout.addWidget(set_system_btn, 3, 0, 1, 2)
+
+        layout.addLayout(settings_layout)
 
     def create_appliance_inputs(self, layout):
-        layout.addWidget(QLabel("Appliance Name:"))
+        appliance_layout = QGridLayout()
+        appliance_layout.addWidget(QLabel("Appliance Name:"), 0, 0)
         self.appliance_name_input = QLineEdit()
-        layout.addWidget(self.appliance_name_input)
+        appliance_layout.addWidget(self.appliance_name_input, 0, 1)
 
-        layout.addWidget(QLabel("Appliance Power (watts):"))
+        appliance_layout.addWidget(QLabel("Power (watts):"), 1, 0)
         self.appliance_power_input = QLineEdit()
-        layout.addWidget(self.appliance_power_input)
+        appliance_layout.addWidget(self.appliance_power_input, 1, 1)
 
-        layout.addWidget(QLabel("Priority Level:"))
+        appliance_layout.addWidget(QLabel("Priority:"), 2, 0)
         self.priority_combo = QComboBox()
         self.priority_combo.addItems(["Low", "Medium", "High"])
-        layout.addWidget(self.priority_combo)
+        appliance_layout.addWidget(self.priority_combo, 2, 1)
 
-        layout.addWidget(QLabel("Start Time:"))
+        appliance_layout.addWidget(QLabel("Start Time:"), 3, 0)
         self.start_time_edit = QTimeEdit()
-        layout.addWidget(self.start_time_edit)
+        appliance_layout.addWidget(self.start_time_edit, 3, 1)
 
-        layout.addWidget(QLabel("End Time:"))
+        appliance_layout.addWidget(QLabel("End Time:"), 4, 0)
         self.end_time_edit = QTimeEdit()
-        layout.addWidget(self.end_time_edit)
+        appliance_layout.addWidget(self.end_time_edit, 4, 1)
 
-        layout.addWidget(QLabel("Minimum Runtime (hours):"))
+        appliance_layout.addWidget(QLabel("Min Runtime (hours):"), 5, 0)
         self.min_runtime_input = QLineEdit()
-        layout.addWidget(self.min_runtime_input)
+        appliance_layout.addWidget(self.min_runtime_input, 5, 1)
 
         add_appliance_btn = QPushButton("Add Appliance")
         add_appliance_btn.clicked.connect(self.add_appliance)
-        layout.addWidget(add_appliance_btn)
+        appliance_layout.addWidget(add_appliance_btn, 6, 0, 1, 2)
 
         self.appliance_list = QListWidget()
-        layout.addWidget(self.appliance_list)
+        appliance_layout.addWidget(self.appliance_list, 7, 0, 1, 2)
 
         remove_appliance_btn = QPushButton("Remove Selected Appliance")
         remove_appliance_btn.clicked.connect(self.remove_appliance)
-        layout.addWidget(remove_appliance_btn)
+        appliance_layout.addWidget(remove_appliance_btn, 8, 0, 1, 2)
 
         self.total_consumption_label = QLabel("Total Power Consumption: 0 watts")
-        layout.addWidget(self.total_consumption_label)
+        appliance_layout.addWidget(self.total_consumption_label, 9, 0, 1, 2)
+
+        layout.addLayout(appliance_layout)
 
     def create_load_save_buttons(self, layout):
+        button_layout = QHBoxLayout()
         load_btn = QPushButton("Load Configuration")
         load_btn.clicked.connect(self.load_configuration)
-        layout.addWidget(load_btn)
+        button_layout.addWidget(load_btn)
 
         save_btn = QPushButton("Save Configuration")
         save_btn.clicked.connect(self.save_configuration)
-        layout.addWidget(save_btn)
+        button_layout.addWidget(save_btn)
+
+        layout.addLayout(button_layout)
 
     def set_components(self):
         try:
@@ -347,7 +406,7 @@ class MainWindow(QMainWindow):
             return
 
         self.simulation_results = self.simulate_days(3)  # Simulate for 3 days
-        self.plot_results()
+        self.graphs.update_graphs(self.simulation_results)
 
     def simulate_days(self, num_days):
         results = []
@@ -355,6 +414,7 @@ class MainWindow(QMainWindow):
         total_generation = self.household.solar_panel.capacity
 
         for day in range(num_days):
+            # Reset daily runtime for each appliance at the start of the day
             for appliance in self.household.appliances:
                 appliance.reset_daily_runtime(day)
 
@@ -373,7 +433,7 @@ class MainWindow(QMainWindow):
         power_used = 0
         appliances_running = []
 
-        for appliance in self.household.appliances:
+        for appliance in sorted(self.household.appliances, key=lambda x: x.priority):
             start_hour = appliance.start_time.hour()
             end_hour = appliance.end_time.hour()
             
@@ -394,43 +454,6 @@ class MainWindow(QMainWindow):
             'battery_charge': battery_charge,
             'appliances_running': appliances_running
         }
-
-    def plot_results(self):
-        days = [result['day'] for result in self.simulation_results]
-        hours = [result['hour'] for result in self.simulation_results]
-        time = [day * 24 + hour for day, hour in zip(days, hours)]
-        
-        generation = [result['generation'] for result in self.simulation_results]
-        power_used = [result['power_used'] for result in self.simulation_results]
-        battery_charge = [result['battery_charge'] for result in self.simulation_results]
-
-        self.ax[0].clear()
-        self.ax[1].clear()
-
-        # Plot power generation and consumption
-        self.ax[0].plot(time, generation, label='Solar Generation', color='yellow')
-        self.ax[0].plot(time, power_used, label='Power Consumption', color='red')
-        self.ax[0].set_ylabel('Power (W)')
-        self.ax[0].set_title('Solar Generation vs Power Consumption')
-        self.ax[0].legend()
-
-        # Plot battery charge
-        self.ax[1].plot(time, battery_charge, label='Battery Charge', color='blue')
-        self.ax[1].set_xlabel('Time (hours)')
-        self.ax[1].set_ylabel('Battery Charge (Wh)')
-        self.ax[1].set_title('Battery Charge Over Time')
-        self.ax[1].legend()
-
-        # Set x-axis ticks and labels
-        xticks = range(0, len(time), 24)
-        xticklabels = [f'Day {i+1}' for i in range(len(xticks))]
-        for ax in self.ax:
-            ax.set_xticks(xticks)
-            ax.set_xticklabels(xticklabels)
-            ax.grid(True, linestyle='--', alpha=0.7)
-
-        self.figure.tight_layout()
-        self.canvas.draw()
 
     def load_configuration(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Load Configuration", "", "JSON Files (*.json)")
