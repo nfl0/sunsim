@@ -2,7 +2,7 @@ import sys
 import json
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QLineEdit, QPushButton, QListWidget, QMessageBox, 
-                             QComboBox, QTextEdit, QSlider, QTimeEdit, QFileDialog)
+                             QComboBox, QTextEdit, QTimeEdit, QFileDialog, QDial)
 from PyQt5.QtCore import Qt, QTime
 
 class SolarComponent:
@@ -25,7 +25,18 @@ class Appliance:
         self.start_time = start_time
         self.end_time = end_time
         self.min_runtime = min_runtime
-        self.runtime = 0
+        self.daily_runtime = {}  # Track runtime for each day
+
+    def reset_daily_runtime(self, day):
+        self.daily_runtime[day] = 0
+
+    def add_runtime(self, day, hours):
+        if day not in self.daily_runtime:
+            self.daily_runtime[day] = 0
+        self.daily_runtime[day] += hours
+
+    def get_daily_runtime(self, day):
+        return self.daily_runtime.get(day, 0)
 
     def to_dict(self):
         return {
@@ -215,11 +226,13 @@ class MainWindow(QMainWindow):
         self.simulate_btn.clicked.connect(self.run_simulation)
         layout.addWidget(self.simulate_btn)
 
-        self.hour_slider = QSlider(Qt.Horizontal)
-        self.hour_slider.setMinimum(0)
-        self.hour_slider.setMaximum(23)
-        self.hour_slider.valueChanged.connect(self.update_simulation_output)
-        layout.addWidget(self.hour_slider)
+        self.hour_dial = QDial()
+        self.hour_dial.setMinimum(0)
+        self.hour_dial.setMaximum(71)  # 3 full days (24 * 3 - 1)
+        self.hour_dial.setNotchesVisible(True)
+        self.hour_dial.setWrapping(True)
+        self.hour_dial.valueChanged.connect(self.update_simulation_output)
+        layout.addWidget(self.hour_dial)
 
         self.hour_label = QLabel("Hour: 0")
         layout.addWidget(self.hour_label)
@@ -298,14 +311,19 @@ class MainWindow(QMainWindow):
         battery_charge = self.household.battery.capacity
         total_generation = self.household.solar_panel.capacity
 
-        for hour in range(24):
-            hour_result = self.simulate_hour(hour, battery_charge, total_generation)
-            results.append(hour_result)
-            battery_charge = hour_result['battery_charge']
+        for day in range(3):  # Simulate 3 days
+            # Reset daily runtime for each appliance at the start of the day
+            for appliance in self.household.appliances:
+                appliance.reset_daily_runtime(day)
+
+            for hour in range(24):
+                hour_result = self.simulate_hour(hour, day, battery_charge, total_generation)
+                results.append(hour_result)
+                battery_charge = hour_result['battery_charge']
 
         return results
 
-    def simulate_hour(self, hour, battery_charge, total_generation):
+    def simulate_hour(self, hour, day, battery_charge, total_generation):
         generation_percentage = self.solar_generation_data.get(hour, 0)
         generation = total_generation * generation_percentage
 
@@ -318,15 +336,16 @@ class MainWindow(QMainWindow):
             end_hour = appliance.end_time.hour()
             
             if start_hour <= hour < end_hour or (end_hour < start_hour and (hour >= start_hour or hour < end_hour)):
-                if available_power >= appliance.power and appliance.runtime < appliance.min_runtime:
+                if available_power >= appliance.power and appliance.get_daily_runtime(day) < appliance.min_runtime:
                     power_used += appliance.power
                     available_power -= appliance.power
-                    appliance.runtime += 1
+                    appliance.add_runtime(day, 1)
                     appliances_running.append(appliance.name)
 
         battery_charge = min(available_power, self.household.battery.capacity)
 
         return {
+            'day': day,
             'hour': hour,
             'generation': generation,
             'power_used': power_used,
@@ -334,11 +353,13 @@ class MainWindow(QMainWindow):
             'appliances_running': appliances_running
         }
 
-    def update_simulation_output(self, hour):
-        self.hour_label.setText(f"Hour: {hour}")
+    def update_simulation_output(self, value):
+        hour = value % 24
+        day = value // 24
+        self.hour_label.setText(f"Day {day + 1}, Hour: {hour}")
         if hasattr(self, 'simulation_results'):
-            result = self.simulation_results[hour]
-            output = f"Hour {result['hour']}:\n"
+            result = self.simulation_results[value]
+            output = f"Day {day + 1}, Hour {hour}:\n"
             output += f"Solar generation: {result['generation']:.2f} Wh\n"
             output += f"Power used: {result['power_used']:.2f} Wh\n"
             output += f"Battery charge: {result['battery_charge']:.2f} Wh\n"
